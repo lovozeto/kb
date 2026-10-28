@@ -11,6 +11,12 @@ The Markdown files stay the source of truth. The index is derived: it rebuilds i
 whenever a Markdown file, `TAXONOMY.md`, or `kb` itself changes. Rebuilding costs no model
 tokens and takes about a second.
 
+## Install
+
+`lobomorir-ai-setup/deploy.sh` links `bin/kb` to `~/.local/bin/kb` when this clone exists at
+`~/GitHub/entrepreneur-projects/kb` (override with `KB_CLONE`). By hand:
+`ln -s <clone>/bin/kb ~/.local/bin/kb`.
+
 ## Commands
 
 ```bash
