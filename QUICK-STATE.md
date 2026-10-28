@@ -17,5 +17,5 @@ The KB plan's remaining steps are issues on the board: **https://github.com/user
 
 ## Notes
 
-- Until #12 (install on the PATH), run it from the clone: `~/GitHub/kb/bin/kb` (or `python3 kb`).
+- On the PATH: `deploy.sh` (lobomorir-ai-setup) links `bin/kb` to `~/.local/bin/kb` (#12). Without the link, run `~/GitHub/entrepreneur-projects/kb/bin/kb`.
 - The index is a derived cache (OS cache folder) and is never committed.
