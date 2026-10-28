@@ -65,9 +65,6 @@ class ParseMarkdownTest(unittest.TestCase):
                          "GOV.UK Design System: https://example.org/names")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TitleTest(unittest.TestCase):
     def test_h1_becomes_the_document_title(self):

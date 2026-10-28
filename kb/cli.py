@@ -5,145 +5,147 @@ import json
 import os
 import sys
 
-from kb import index as ix
+from kb import index
+
+TEXT_WIDTH = 300
 
 
-def _scope(args, con):
+def _scope(args):
+    """Global KB + the repo you are in + any --project; --all means every project."""
     if getattr(args, "all", False):
-        return "all"
-    names = set()
-    if getattr(args, "project", None):
-        names.update(args.project)
-    here = ix.current_project(os.getcwd(), ix.find_project_kbs(ix.projects_root()))
+        return index.Scope(everything=True)
+    projects = set(getattr(args, "project", None) or [])
+    here = index.current_project(os.getcwd(), index.find_project_kbs(index.projects_root()))
     if here:
-        names.add(here)
-    return names
+        projects.add(here)
+    return index.Scope(projects=projects)
 
 
-def _print(rows, as_json, fmt):
+def _emit(data, as_json, render):
+    """Print data as JSON, or as text lines produced by render(data)."""
     if as_json:
-        print(json.dumps(rows, ensure_ascii=False, indent=1))
+        print(json.dumps(data, ensure_ascii=False, indent=1))
     else:
-        for r in rows:
-            print(fmt(r))
+        for line in render(data):
+            print(line)
+
+
+def _clip(text):
+    return text if len(text) <= TEXT_WIDTH else text[:TEXT_WIDTH - 1].rstrip() + "…"
 
 
 def cmd_search(args):
-    con, tax = ix.open_index()
-    hits = ix.search(con, tax, " ".join(args.query), bases=args.base or (), tags=args.tag or (),
-                     facets=args.facet or (), tier=args.tier, fresh=args.fresh, raw=args.raw,
-                     projects=_scope(args, con), limit=args.limit)
-
-    def line(h):
-        src = (" [%s]" % h["source"]) if h["source"] else ""
-        return "%s · %s%s" % (h["ref"], h["text"][:300], src)
-    _print(hits, args.json, line)
+    con, taxonomy = index.open_index()
+    filters = index.Filters(bases=args.base or [], tags=args.tag or [], facets=args.facet or [],
+                            tier=args.tier, fresh=args.fresh, raw=args.raw, scope=_scope(args))
+    hits = index.search(con, taxonomy, " ".join(args.query), filters, limit=args.limit)
+    _emit(hits, args.json, lambda rows: [
+        "%s · %s%s" % (h["ref"], _clip(h["text"]), " [%s]" % h["source"] if h["source"] else "")
+        for h in rows])
     return 0
 
 
 def cmd_get(args):
-    con, _ = ix.open_index()
+    con, _ = index.open_index()
     if "#" in args.ref:
-        text = ix.get_section(con, args.ref)
+        text = index.get_section(con, args.ref)
         if text is None:
-            print("kb: no section %s (try `kb get %s` for its outline)"
-                  % (args.ref, args.ref.split("#")[0]), file=sys.stderr)
-            return 1
-        print(json.dumps({"ref": args.ref, "text": text}, ensure_ascii=False) if args.json
-              else text, end="" if not args.json else "\n")
+            raise index.KbError("no section %s (try `kb get %s` for its outline)"
+                                % (args.ref, args.ref.split("#")[0]))
+        if args.json:
+            print(json.dumps({"ref": args.ref, "text": text}, ensure_ascii=False))
+        else:
+            print(text, end="")
         return 0
-    rows = ix.outline(con, args.ref)
-    if not rows:
-        print("kb: no file %s" % args.ref, file=sys.stderr)
-        return 1
-    _print(rows, args.json,
-           lambda r: "%s#%s · %s (%d rules)" % (args.ref, r["anchor"], r["heading"], r["rules"]))
+    sections = index.outline(con, args.ref)
+    if not sections:
+        raise index.KbError("no file %s" % args.ref)
+    _emit(sections, args.json, lambda rows: [
+        "%s#%s · %s (%d rules)" % (args.ref, r["anchor"], r["heading"], r["rules"]) for r in rows])
     return 0
 
 
 def cmd_facets(args):
-    con, _ = ix.open_index()
-    counts = ix.facet_counts(con, _scope(args, con))
-    if args.json:
-        print(json.dumps(counts, ensure_ascii=False, indent=1))
-    else:
-        for facet, values in counts.items():
-            print("%s: %s" % (facet, ", ".join("%s (%d)" % kv for kv in values.items())))
+    con, _ = index.open_index()
+    _emit(index.facet_counts(con, _scope(args)), args.json, lambda counts: [
+        "%s: %s" % (facet, ", ".join("%s (%d)" % kv for kv in values.items()))
+        for facet, values in counts.items()])
     return 0
 
 
 def cmd_stale(args):
-    con, _ = ix.open_index()
-    rows = ix.stale_files(con, _scope(args, con))
-    _print(rows, args.json, lambda r: "%s · %s %s" % (r["ref"], r["reason"], r["review_by"] or ""))
+    con, _ = index.open_index()
+    _emit(index.stale_files(con, _scope(args)), args.json, lambda rows: [
+        "%s · %s %s" % (r["ref"], r["reason"], r["review_by"] or "") for r in rows])
     return 0
 
 
 def cmd_lint(args):
-    con, tax = ix.open_index()
-    report = ix.lint(con, tax)
-    if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=1))
-    else:
-        for e in report["errors"]:
-            print("ERROR  " + e)
-        for w in report["warnings"]:
-            print("warn   " + w)
-        print("%d error(s), %d warning(s)" % (len(report["errors"]), len(report["warnings"])))
+    con, taxonomy = index.open_index()
+    report = index.lint(con, taxonomy, _scope(args))
+    _emit(report, args.json, lambda rep: (
+        ["ERROR  " + e for e in rep["errors"]] + ["warn   " + w for w in rep["warnings"]] +
+        ["%d error(s), %d warning(s)" % (len(rep["errors"]), len(rep["warnings"]))]))
     return 1 if report["errors"] else 0
 
 
 def cmd_index(args):
-    ix.open_index(force=True)
-    print("kb: index rebuilt at %s" % ix.default_index_path())
+    index.open_index(force=True)
+    _emit({"index": index.default_index_path()}, args.json,
+          lambda d: ["kb: index rebuilt at %s" % d["index"]])
     return 0
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="kb", description=__doc__)
-    sub = p.add_subparsers(dest="cmd", required=True)
+    parser = argparse.ArgumentParser(prog="kb", description=__doc__)
+    commands = parser.add_subparsers(dest="cmd", required=True)
 
-    def common(sp):
-        sp.add_argument("--json", action="store_true", help="machine-readable output")
-        sp.add_argument("--project", action="append", metavar="NAME",
-                        help="also include this project's knowledge (repeatable)")
-        sp.add_argument("--all", action="store_true", help="include every project")
+    def with_scope(cmd):
+        cmd.add_argument("--json", action="store_true", help="machine-readable output")
+        cmd.add_argument("--project", action="append", metavar="NAME",
+                         help="also include this project's knowledge (repeatable)")
+        cmd.add_argument("--all", action="store_true", help="include every project")
 
-    s = sub.add_parser("search", help="find rules (atomic facts) matching words and filters")
-    s.add_argument("query", nargs="+")
-    s.add_argument("--base", action="append", help="limit to a base (repeatable)")
-    s.add_argument("--tag", action="append", help="any facet value or synonym (repeatable)")
-    s.add_argument("--facet", action="append", metavar="FACET=VALUE")
-    s.add_argument("--tier", choices=["advisory", "proven"])
-    s.add_argument("--fresh", action="store_true", help="only files whose review_by is ahead")
-    s.add_argument("--raw", action="store_true", help="include .raw/ source captures")
-    s.add_argument("--limit", type=int, default=8)
-    common(s)
-    s.set_defaults(func=cmd_search)
+    search = commands.add_parser("search", help="find rules (atomic facts) by words and filters")
+    search.add_argument("query", nargs="+")
+    search.add_argument("--base", action="append", help="limit to a base (repeatable)")
+    search.add_argument("--tag", action="append", help="any tag value or synonym (repeatable)")
+    search.add_argument("--facet", action="append", metavar="FACET=VALUE",
+                        help="tagged facet or base|tier|fresh|source|file (repeatable)")
+    search.add_argument("--tier", choices=["advisory", "proven"])
+    search.add_argument("--fresh", action="store_true", help="only files whose review_by is ahead")
+    search.add_argument("--raw", action="store_true", help="include .raw/ source captures")
+    search.add_argument("--limit", type=int, default=8)
+    with_scope(search)
+    search.set_defaults(func=cmd_search)
 
-    g = sub.add_parser("get", help="print one section (file#anchor) or a file's outline")
-    g.add_argument("ref")
-    common(g)
-    g.set_defaults(func=cmd_get)
+    get = commands.add_parser("get", help="print one section (file#anchor) or a file's outline")
+    get.add_argument("ref")
+    with_scope(get)
+    get.set_defaults(func=cmd_get)
 
-    f = sub.add_parser("facets", help="list tag values and how many sections carry each")
-    common(f)
-    f.set_defaults(func=cmd_facets)
+    facets = commands.add_parser("facets", help="tag and automatic facet values, with counts")
+    with_scope(facets)
+    facets.set_defaults(func=cmd_facets)
 
-    st = sub.add_parser("stale", help="files whose review_by has passed or is missing")
-    common(st)
-    st.set_defaults(func=cmd_stale)
+    stale = commands.add_parser("stale", help="files whose review_by has passed or is missing")
+    with_scope(stale)
+    stale.set_defaults(func=cmd_stale)
 
-    li = sub.add_parser("lint", help="check tags against TAXONOMY.md and missing metadata")
-    common(li)
-    li.set_defaults(func=cmd_lint)
+    lint = commands.add_parser("lint", help="check tags against TAXONOMY.md and missing metadata")
+    with_scope(lint)
+    lint.set_defaults(func=cmd_lint)
 
-    i = sub.add_parser("index", help="force a full rebuild (normally automatic)")
-    i.add_argument("--json", action="store_true")
-    i.set_defaults(func=cmd_index)
-    return p
+    rebuild = commands.add_parser("index", help="force a full rebuild (normally automatic)")
+    rebuild.add_argument("--json", action="store_true")
+    rebuild.set_defaults(func=cmd_index)
+    return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except index.KbError as exc:
+        print("kb: %s" % exc, file=sys.stderr)
+        return 2 if args.cmd == "search" else 1

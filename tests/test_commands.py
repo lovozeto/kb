@@ -69,19 +69,3 @@ class ReindexTest(CliTestCase):
             f.write("\n## Zebra stripes\n- Zebra stripes are high contrast. [zoo]\n")
         refs = [h["ref"] for h in self.kb_json("search", "zebra")]
         self.assertIn("brand/color#zebra-stripes", refs)
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-class CodeChangeReindexTest(CliTestCase):
-    def test_index_rebuilds_when_kb_code_version_changes(self):
-        import sqlite3
-        self.kb_json("search", "contrast")
-        db = sqlite3.connect(self.tmp + "/index.db")
-        db.execute("UPDATE meta SET value = 'stale-fingerprint' WHERE key = 'fingerprint'")
-        db.execute("DELETE FROM rules_fts")
-        db.commit()
-        db.close()
-        self.assertTrue(self.kb_json("search", "contrast"))

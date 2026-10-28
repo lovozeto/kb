@@ -42,6 +42,19 @@ class Document:
     sections: list
     title: str = ""
 
+    def parent_of(self, section):
+        """The level-2 section a level-3 section belongs to, else None."""
+        if section.level != 3 or "/" not in section.anchor:
+            return None
+        parent_anchor = section.anchor.rsplit("/", 1)[0]
+        return next((s for s in self.sections if s.anchor == parent_anchor), None)
+
+    def prose_of(self, section, lines):
+        """A section's non-heading, non-tag text joined into one line (for prose KBs)."""
+        body = [ln.strip() for ln in lines[section.start_line:section.end_line]
+                if ln.strip() and not ln.strip().startswith(("#", "<!--"))]
+        return " ".join(body)[:1200]
+
 
 def slugify(text):
     slug = re.sub(r"[^\w\s-]", "", text.lower(), flags=re.UNICODE)

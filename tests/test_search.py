@@ -28,9 +28,6 @@ class SearchTest(CliTestCase):
         self.assertIn("ux/.raw/govuk#names", refs)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class PhraseTest(CliTestCase):
     def test_exact_phrase_ranks_before_scattered_words(self):
