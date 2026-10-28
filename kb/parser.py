@@ -4,7 +4,8 @@ Format (see README):
 - optional YAML-like frontmatter between `---` lines (top-level scalars, `sources` list);
 - `##` / `###` headings start sections; a `<!-- tags: facet=v1,v2; facet=v -->` line right
   under a heading tags that section, and child sections inherit their parent's tags;
-- a rule is a `- ` bullet (continuation lines indented), ending in an optional `[source]`.
+- a rule is a `- ` bullet (continuation lines indented), ending in an optional `[source]`
+  or, in a `kind: decisions` file, a decision date.
 """
 
 import re
@@ -14,6 +15,7 @@ HEADING_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
 TAGS_RE = re.compile(r"^<!--\s*tags:\s*(.*?)\s*-->\s*$")
 SOURCE_RE = re.compile(r"\s*\[([^\[\]]+)\]\s*$")
 SCALAR_RE = re.compile(r"^([A-Za-z_][\w-]*):\s*(.*?)\s*$")
+DATE_END_RE = re.compile(r"\b\d{4}-\d{2}(?:-\d{2})?(?:\s*\([^()]*\))?$")
 PUBLISHER_RE = re.compile(r"^\s*-?\s*publisher:\s*(.+?)\s*$")
 
 
@@ -22,6 +24,7 @@ class Rule:
     text: str
     source: str = ""
     line: int = 0
+    dated: bool = False   # ends with YYYY-MM[-DD], optionally followed by (text)
 
 
 @dataclass
@@ -110,7 +113,8 @@ def _make_rule(parts, line_no):
     if m:
         source = m.group(1).strip()
         text = text[: m.start()].rstrip()
-    return Rule(text=text, source=source, line=line_no)
+    return Rule(text=text, source=source, line=line_no,
+                dated=bool(DATE_END_RE.search(text)))
 
 
 def parse_markdown(text):

@@ -188,13 +188,13 @@ def load_taxonomy():
 SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT, ref TEXT UNIQUE, base TEXT,
-  project TEXT, raw INTEGER, tier TEXT, review_by TEXT, last_verified TEXT);
+  project TEXT, raw INTEGER, tier TEXT, review_by TEXT, last_verified TEXT, kind TEXT);
 CREATE TABLE file_sources (file_id INTEGER, publisher TEXT);
 CREATE TABLE sections (id INTEGER PRIMARY KEY, file_id INTEGER, anchor TEXT, heading TEXT,
   level INTEGER, start_line INTEGER, end_line INTEGER, tags TEXT);
 CREATE TABLE tags (section_id INTEGER, facet TEXT, value TEXT);
 CREATE TABLE rules (id INTEGER PRIMARY KEY, section_id INTEGER, text TEXT, source TEXT,
-  line INTEGER, prose INTEGER);
+  line INTEGER, prose INTEGER, dated INTEGER);
 CREATE VIRTUAL TABLE rules_fts USING fts5(text, heading, tagtext,
   tokenize='unicode61 remove_diacritics 2');
 """
@@ -210,10 +210,10 @@ def _index_file(con, item, taxonomy):
     lines = text.splitlines()
     fm = doc.frontmatter
     file_id = con.execute(
-        "INSERT INTO files (path, ref, base, project, raw, tier, review_by, last_verified)"
-        " VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO files (path, ref, base, project, raw, tier, review_by, last_verified, kind)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
         (item.path, item.ref, item.base, item.project, int(item.raw), fm.get("tier", ""),
-         fm.get("review_by", ""), fm.get("last_verified", ""))).lastrowid
+         fm.get("review_by", ""), fm.get("last_verified", ""), fm.get("kind", ""))).lastrowid
     for publisher in doc.publishers:
         con.execute("INSERT INTO file_sources VALUES (?,?)", (file_id, publisher))
     for s in doc.sections:
@@ -235,8 +235,9 @@ def _index_file(con, item, taxonomy):
                                                 s.heading) if x)
         for r in rules:
             rule_id = con.execute(
-                "INSERT INTO rules (section_id, text, source, line, prose) VALUES (?,?,?,?,?)",
-                (section_id, r.text, r.source, r.line, int(prose))).lastrowid
+                "INSERT INTO rules (section_id, text, source, line, prose, dated)"
+                " VALUES (?,?,?,?,?,?)",
+                (section_id, r.text, r.source, r.line, int(prose), int(r.dated))).lastrowid
             con.execute("INSERT INTO rules_fts (rowid, text, heading, tagtext) VALUES (?,?,?,?)",
                         (rule_id, r.text, heading_path, " ".join(tag_terms)))
 
@@ -489,7 +490,7 @@ def lint(con, taxonomy, scope):
             warnings.append("%s: no tier in frontmatter" % f["ref"])
         if not f["review_by"]:
             warnings.append("%s: no review_by in frontmatter" % f["ref"])
-    sections = con.execute("SELECT s.id, s.anchor, s.tags, f.ref FROM sections s JOIN files f"
+    sections = con.execute("SELECT s.id, s.anchor, s.tags, f.ref, f.kind FROM sections s JOIN files f"
                            " ON f.id = s.file_id WHERE f.raw = 0" + scope_sql +
                            " ORDER BY f.ref, s.start_line", params).fetchall()
     for s in sections:
@@ -509,10 +510,10 @@ def lint(con, taxonomy, scope):
                 hit = taxonomy.canonical(v)
                 hint = (" — use '%s'" % hit[1]) if hit and hit[0] == facet else ""
                 errors.append("%s: '%s' is not a %s value%s" % (where, v, facet, hint))
-        for r in con.execute("SELECT line, source, prose FROM rules WHERE section_id = ?",
+        for r in con.execute("SELECT line, source, prose, dated FROM rules WHERE section_id = ?",
                              (s["id"],)):
             if r["prose"]:
                 warnings.append("%s: prose, not atomic rules (convert to bullets)" % where)
-            elif not r["source"]:
+            elif not r["source"] and not (s["kind"] == "decisions" and r["dated"]):
                 warnings.append("%s: rule on line %d has no source" % (where, r["line"]))
     return {"errors": errors, "warnings": warnings}

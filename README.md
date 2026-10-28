@@ -59,6 +59,9 @@ sources:
 
 - `##` and `###` headings are sections; a `###` inherits its parent's tags.
 - A rule is a `- ` bullet; its source goes in a trailing `[…]`.
+- `kind: decisions` in the frontmatter marks a file of the team's own decisions: there, a rule
+  that ends with a date (`2026-07`, `2026-10-22`, optionally `2026-10-28 (replaces …)`) counts as
+  sourced for `kb lint`. Without the key, a rule needs a `[source]`.
 - Sections without bullets are indexed as prose, so unconverted notes stay findable.
 - Tags: several values per facet. `keywords` is free text for findability; every other facet
   must use the values in `TAXONOMY.md`.
