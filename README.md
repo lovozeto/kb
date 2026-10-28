@@ -27,8 +27,14 @@ kb index                                        # force a rebuild (normally auto
 Every command takes `--json`. Search filters: `--base`, `--tag` (any facet value or synonym),
 `--facet facet=value`, `--tier advisory|proven`, `--fresh`, `--raw`, `--limit`.
 
-Search tries the exact phrase first, then all words, then any word. Scope: the global KB plus
-the knowledge of the repo you are in; add `--project NAME` for another repo, `--all` for every one.
+`--facet` takes any tagged facet from `TAXONOMY.md` or an automatic one: `base`, `tier`,
+`fresh` (`fresh`, `expired`, `unknown`), `source` (publisher), `file`. An unknown facet is an
+error (exit 2). `kb facets` lists both kinds with counts.
+
+Search tries the exact phrase first, then all words, then any word; each query word also
+matches its synonym ring. Scope: the global KB plus the knowledge of the repo you are in; add
+`--project NAME` for another repo, `--all` for every one. `stale`, `facets` and `lint` use the
+same scope.
 
 ## Knowledge format
 
@@ -70,10 +76,18 @@ reaches the canonical value.
 | What | Default | Override |
 |---|---|---|
 | Global KB | `~/dev/claude-kb` | `KB_ROOT` |
-| Repo knowledge | `<repo>/.claude/knowledge` under `~/GitHub` | `KB_PROJECTS_ROOT` |
+| Repo knowledge | `<repo>/.claude/knowledge`, up to 4 folders deep under `~/GitHub` | `KB_PROJECTS_ROOT` |
 | Index | OS cache (`~/Library/Caches/kb`, `$XDG_CACHE_HOME/kb`, `%LOCALAPPDATA%\kb`) | `KB_INDEX` |
+| Today's date (for `fresh`/`stale`) | system date | `KB_TODAY` (`YYYY-MM-DD`) |
 
-Skipped: `INDEX.md`, `TAXONOMY.md`, `README.md`, `templates/`; `.raw/` only with `--raw`.
+A project is named after its repo folder; when two repos share a name, both use their path
+relative to the projects root.
+
+Skipped at a knowledge root: `INDEX.md`, `TAXONOMY.md`, `README.md`, `templates/`. A
+`templates/` folder deeper down is indexed. `.raw/` only with `--raw`.
+
+`kb lint` reports errors (unknown facet, value not in `TAXONOMY.md`) and warnings (no `tier`,
+no `review_by`, no tags, prose section, rule without a source). It exits 1 on errors.
 
 ## Develop
 
