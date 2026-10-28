@@ -6,6 +6,7 @@
 
 - `kb` CLI (stdlib-only Python ≥ 3.9): `search`, `get`, `facets`, `stale`, `lint`, `index`, all with `--json`. Built test-first; unit tests under `tests/` pass.
 - CI (`.github/workflows/test.yml`): macOS, Linux and Windows × Python 3.9 and 3.x.
+- Review fixes (2026-10-28): rule text ranks before tag-only matches; a missing KB folder and an empty query are errors.
 - Taxonomy and tags (2026-10-28): global KB tagged against `TAXONOMY.md` (lobomorir-ai-setup PR #10, merged). `kb lint` reports 0 errors on the global KB.
 
 ## Next

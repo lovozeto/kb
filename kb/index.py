@@ -274,6 +274,8 @@ def _stored_fingerprint(db_path):
 
 def open_index(force=False):
     """Return (connection to an up-to-date index, taxonomy)."""
+    if not os.path.isdir(kb_root()):
+        raise KbError("no KB at %s (set KB_ROOT to the knowledge folder)" % kb_root())
     db_path = default_index_path()
     items = discover()
     taxonomy = load_taxonomy()
@@ -328,6 +330,7 @@ def _facet_sql(facet, value, taxonomy):
 # --- search --------------------------------------------------------------------------------
 
 TOKEN_RE = re.compile(r"[\w.:]+", re.UNICODE)
+TEXT_COLUMNS = "{text heading} : "
 
 
 def _quote(term):
@@ -352,6 +355,9 @@ def _match_expressions(query, taxonomy):
     if len(tokens) > 1:
         strict.append(_quote(" ".join(tokens)))
     strict.append(" AND ".join(_term_group(t, taxonomy) for t in tokens))
+    # Each level first in the rule's own words, then also in its tags: a rule that says the
+    # word (or a synonym) ranks before rules that only carry the matching tag.
+    strict = [e for expression in strict for e in (TEXT_COLUMNS + expression, expression)]
     fallback = " OR ".join(_term_group(t, taxonomy) for t in tokens) if len(tokens) > 1 else ""
     return strict, fallback
 
@@ -388,6 +394,8 @@ def search(con, taxonomy, query, filters, limit=8):
            " ORDER BY bm25(rules_fts, 1.0, 2.0, 1.5) LIMIT ?")
     bind = params + scope_params
     strict, fallback = _match_expressions(query, taxonomy)
+    if not strict:
+        raise KbError("empty query: give at least one word to search for")
     rows, seen = [], set()
     for expression in strict:               # stricter matches rank first, looser ones fill
         if len(rows) >= limit:

@@ -32,7 +32,9 @@ Every command takes `--json`. Search filters: `--base`, `--tag` (any facet value
 error (exit 2). `kb facets` lists both kinds with counts.
 
 Search tries the exact phrase first, then all words, then any word; each query word also
-matches its synonym ring. Scope: the global KB plus the knowledge of the repo you are in; add
+matches its synonym ring. At each level, rules whose own text or heading has the words rank
+before rules that only carry a matching tag. A missing KB folder or an empty query is an error
+(exit 2 for `search`, 1 for the other commands), so "no KB" never looks like "no results". Scope: the global KB plus the knowledge of the repo you are in; add
 `--project NAME` for another repo, `--all` for every one. `stale`, `facets` and `lint` use the
 same scope.
 
