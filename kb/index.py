@@ -21,7 +21,10 @@ ROOT_ONLY_FILES = {"INDEX.md", "TAXONOMY.md", "README.md"}   # skipped at a know
 ROOT_ONLY_DIRS = {"templates"}                               # skipped at a knowledge root
 NEVER_DIRS = {".git", "node_modules"}
 AUTO_FACETS = {"base", "tier", "fresh", "source", "file"}
-SCHEMA_VERSION = "2"
+STATUS_VALUES = ("fresh", "stale", "ambiguous")
+SCHEMA_VERSION = "3"
+ROUTER_MARK = ("<!-- kb router: the table below is generated from each file's `summary:`;"
+               " edit the summaries, then run `kb router --write` -->")
 
 
 class KbError(Exception):
@@ -126,6 +129,29 @@ def current_project(cwd, projects):
     return best[0] if best else None
 
 
+def find_here(cwd, projects):
+    """(name, knowledge dir) of the repo that contains cwd, found by walking up from cwd.
+
+    Works wherever the repo is, not only under KB_PROJECTS_ROOT. The name is the repo folder
+    name unless that name already belongs to another repo under the projects root, in which
+    case the repo's path (slashes) is used so the two never collide.
+    """
+    here = os.path.realpath(cwd)
+    global_root = os.path.realpath(kb_root())
+    while True:
+        kdir = os.path.join(here, ".claude", "knowledge")
+        if os.path.isdir(kdir) and here != global_root:
+            name = os.path.basename(here)
+            known = projects.get(name)
+            if known and os.path.realpath(known) != os.path.realpath(kdir):
+                name = here.replace(os.sep, "/")
+            return name, kdir
+        parent = os.path.dirname(here)
+        if parent == here:
+            return None
+        here = parent
+
+
 # --- discovery ----------------------------------------------------------------------------
 
 def _walk_markdown(kdir):
@@ -138,10 +164,13 @@ def _walk_markdown(kdir):
                 yield os.path.join(dirpath, fn)
 
 
-def discover():
-    """Every indexable file of the global KB and of every project KB."""
+def discover(extra_projects=None):
+    """Every indexable file of the global KB and of every project KB (plus extra ones)."""
     items = []
-    sources = [("", kb_root())] + sorted(find_project_kbs(projects_root()).items())
+    projects = dict(find_project_kbs(projects_root()))
+    for name, kdir in (extra_projects or {}).items():
+        projects.setdefault(name, kdir)
+    sources = [("", kb_root())] + sorted(projects.items())
     for project, kdir in sources:
         if not os.path.isdir(kdir):
             continue
@@ -188,7 +217,8 @@ def load_taxonomy():
 SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT, ref TEXT UNIQUE, base TEXT,
-  project TEXT, raw INTEGER, tier TEXT, review_by TEXT, last_verified TEXT, kind TEXT);
+  project TEXT, raw INTEGER, tier TEXT, review_by TEXT, last_verified TEXT, kind TEXT,
+  summary TEXT, status TEXT);
 CREATE TABLE file_sources (file_id INTEGER, publisher TEXT);
 CREATE TABLE sections (id INTEGER PRIMARY KEY, file_id INTEGER, anchor TEXT, heading TEXT,
   level INTEGER, start_line INTEGER, end_line INTEGER, tags TEXT);
@@ -210,10 +240,11 @@ def _index_file(con, item, taxonomy):
     lines = text.splitlines()
     fm = doc.frontmatter
     file_id = con.execute(
-        "INSERT INTO files (path, ref, base, project, raw, tier, review_by, last_verified, kind)"
-        " VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO files (path, ref, base, project, raw, tier, review_by, last_verified, kind,"
+        " summary, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (item.path, item.ref, item.base, item.project, int(item.raw), fm.get("tier", ""),
-         fm.get("review_by", ""), fm.get("last_verified", ""), fm.get("kind", ""))).lastrowid
+         fm.get("review_by", ""), fm.get("last_verified", ""), fm.get("kind", ""),
+         fm.get("summary", ""), fm.get("status", ""))).lastrowid
     for publisher in doc.publishers:
         con.execute("INSERT INTO file_sources VALUES (?,?)", (file_id, publisher))
     for s in doc.sections:
@@ -273,12 +304,12 @@ def _stored_fingerprint(db_path):
         return None
 
 
-def open_index(force=False):
+def open_index(force=False, extra_projects=None):
     """Return (connection to an up-to-date index, taxonomy)."""
     if not os.path.isdir(kb_root()):
         raise KbError("no KB at %s (set KB_ROOT to the knowledge folder)" % kb_root())
     db_path = default_index_path()
-    items = discover()
+    items = discover(extra_projects)
     taxonomy = load_taxonomy()
     fingerprint = _fingerprint(items, os.path.join(kb_root(), "TAXONOMY.md"))
     if force or not os.path.exists(db_path) or _stored_fingerprint(db_path) != fingerprint:
@@ -471,25 +502,125 @@ def facet_counts(con, scope):
 
 
 def stale_files(con, scope):
+    """Files that need a human look: review_by passed or missing, or status: ambiguous."""
     scope_sql, params = _scope_sql(scope)
-    rows = con.execute("SELECT ref, review_by, last_verified FROM files f WHERE f.raw = 0"
-                       " AND (f.review_by = '' OR f.review_by <= ?)" + scope_sql +
-                       " ORDER BY ref", [today()] + params).fetchall()
-    return [{"ref": r["ref"], "review_by": r["review_by"] or None,
-             "last_verified": r["last_verified"] or None,
-             "reason": "expired" if r["review_by"] else "no review_by"} for r in rows]
+    rows = con.execute("SELECT ref, review_by, last_verified, status FROM files f WHERE f.raw = 0"
+                       " AND (f.review_by = '' OR f.review_by <= ? OR f.status = 'ambiguous')"
+                       + scope_sql + " ORDER BY ref", [today()] + params).fetchall()
+    out = []
+    for r in rows:
+        if r["status"] == "ambiguous":
+            reason = "ambiguous"
+        elif r["review_by"]:
+            reason = "expired"
+        else:
+            reason = "no review_by"
+        out.append({"ref": r["ref"], "review_by": r["review_by"] or None,
+                    "last_verified": r["last_verified"] or None, "reason": reason})
+    return out
+
+
+def stale_summary(rows):
+    """One line for a session hook: how many files need review, by reason."""
+    counts = {"expired": 0, "no review_by": 0, "ambiguous": 0}
+    for r in rows:
+        counts[r["reason"]] = counts.get(r["reason"], 0) + 1
+    total = len(rows)
+    if not total:
+        return "kb: every file is fresh"
+    return "kb: %d file(s) need review (%d expired, %d without review_by, %d ambiguous)" % (
+        total, counts["expired"], counts["no review_by"], counts["ambiguous"])
+
+
+# --- router (INDEX.md) ---------------------------------------------------------------------
+
+def router_rows(con):
+    """[(base, ref, summary)] for the global KB, in INDEX order (by base, then file)."""
+    rows = con.execute("SELECT base, ref, summary FROM files f WHERE f.raw = 0 AND f.project = ''"
+                       " ORDER BY base, ref").fetchall()
+    return [(r["base"], r["ref"], r["summary"]) for r in rows]
+
+
+def render_router(con):
+    """The generated INDEX table: one row per file, its summary from the frontmatter."""
+    lines = ["| Base | File | What for |", "|---|---|---|"]
+    for base, ref, summary in router_rows(con):
+        lines.append("| %s | `%s.md` | %s |" % (base, ref, (summary or "(no summary)")
+                                               .replace("|", "\\|")))
+    return "\n".join(lines) + "\n"
+
+
+def _split_router(text):
+    """(head, table) of an INDEX.md: head is everything above the router mark; with no mark,
+    everything above the first table line."""
+    if ROUTER_MARK in text:
+        head, _, table = text.partition(ROUTER_MARK)
+        return head, table.lstrip("\n")
+    lines = text.splitlines(keepends=True)
+    for i, ln in enumerate(lines):
+        if ln.startswith("|"):
+            return "".join(lines[:i]), "".join(lines[i:])
+    return text if text.endswith("\n") or not text else text + "\n", ""
+
+
+def write_router(con):
+    """Rewrite $KB_ROOT/INDEX.md below the router mark, keeping whatever is written above it."""
+    path = os.path.join(kb_root(), "INDEX.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            head, _ = _split_router(f.read())
+    except OSError:
+        head = "# INDEX — Knowledge base\n\n> The router: read only this to pick a file.\n\n"
+    if head and not head.endswith("\n\n"):
+        head = head.rstrip("\n") + "\n\n"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(head + ROUTER_MARK + "\n\n" + render_router(con))
+    return path
+
+
+INDEX_REF_RE = re.compile(r"`([A-Za-z0-9_./-]+\.md)`")
+
+
+def lint_router(con):
+    """INDEX.md checks for the global KB: dead entries, unlisted files, drift from the summaries."""
+    errors, warnings = [], []
+    path = os.path.join(kb_root(), "INDEX.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return errors, ["INDEX.md: missing (run `kb router --write`)"]
+    listed = set(INDEX_REF_RE.findall(text))
+    files = {ref + ".md" for _, ref, _ in router_rows(con)}
+    for dead in sorted(listed - files):
+        if os.path.exists(os.path.join(kb_root(), dead)):
+            continue                       # a reference to a template or raw file, not a base
+        errors.append("INDEX.md: `%s` does not exist (run `kb router --write`)" % dead)
+    for missing in sorted(files - listed):
+        warnings.append("INDEX.md: `%s` is not listed (run `kb router --write`)" % missing)
+    if ROUTER_MARK not in text:
+        warnings.append("INDEX.md: no router mark; `kb router --write` will take it over")
+    elif _split_router(text)[1].strip() != render_router(con).strip():
+        warnings.append("INDEX.md: table differs from the summaries (run `kb router --write`)")
+    return errors, warnings
 
 
 def lint(con, taxonomy, scope):
     """{"errors": [...], "warnings": [...]} for the files in scope (raw sources excluded)."""
     scope_sql, params = _scope_sql(scope)
-    errors, warnings = [], []
-    for f in con.execute("SELECT ref, tier, review_by FROM files f WHERE f.raw = 0" + scope_sql
-                         + " ORDER BY ref", params):
+    errors, warnings = lint_router(con)
+    for f in con.execute("SELECT ref, tier, review_by, status, summary, project FROM files f"
+                         " WHERE f.raw = 0" + scope_sql + " ORDER BY ref", params):
         if not f["tier"]:
             warnings.append("%s: no tier in frontmatter" % f["ref"])
         if not f["review_by"]:
             warnings.append("%s: no review_by in frontmatter" % f["ref"])
+        if f["status"] and f["status"] not in STATUS_VALUES:
+            errors.append("%s: status '%s' is not one of %s"
+                          % (f["ref"], f["status"], ", ".join(STATUS_VALUES)))
+        if not f["summary"] and not f["project"]:
+            warnings.append("%s: no summary in frontmatter (INDEX.md shows '(no summary)')"
+                            % f["ref"])
     sections = con.execute("SELECT s.id, s.anchor, s.tags, f.ref, f.kind FROM sections s JOIN files f"
                            " ON f.id = s.file_id WHERE f.raw = 0" + scope_sql +
                            " ORDER BY f.ref, s.start_line", params).fetchall()
