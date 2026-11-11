@@ -13,8 +13,8 @@ tokens and takes about a second.
 
 ## Install
 
-`lobomorir-ai-setup/deploy.sh` links `bin/kb` to `~/.local/bin/kb` when this clone exists at
-`~/GitHub/entrepreneur-projects/kb` (override with `KB_CLONE`). By hand:
+`lobomorir-ai-setup/sync.sh` links `bin/kb` to `~/.local/bin/kb` when this clone sits next to
+the setup repo (`<parent>/kb`; override with `KB_CLONE`). By hand:
 `ln -s <clone>/bin/kb ~/.local/bin/kb`.
 
 ## Commands
@@ -25,8 +25,11 @@ kb search "palette" --project wedding-site      # another repo's knowledge
 kb get ux/forms-and-errors#validation           # one section
 kb get ux/forms-and-errors                      # outline of a file
 kb facets                                       # tag values and counts
-kb stale                                        # review_by passed or missing
-kb lint                                         # tags vs TAXONOMY.md, missing metadata
+kb stale                                        # review_by passed or missing, or status: ambiguous
+kb stale --count                                # one line with the totals (for a session hook)
+kb lint                                         # INDEX.md, tags vs TAXONOMY.md, missing metadata
+kb router                                       # the INDEX.md table built from each file's summary:
+kb router --write                               # rewrite $KB_ROOT/INDEX.md below its router mark
 kb index                                        # force a rebuild (normally automatic)
 ```
 
@@ -48,7 +51,10 @@ same scope.
 
 ```markdown
 ---
+summary: Forms: names, validation, inline errors   # one line; INDEX.md is built from these
 tier: advisory            # advisory = from docs; proven = run on this machine
+status: fresh             # optional: fresh | stale | ambiguous (ambiguous = conflicting
+                          # sources or a rule the team has not settled; kb stale lists it)
 last_verified: 2026-10-23
 review_by: 2026-11-23     # kb stale flags it after this date
 sources:
@@ -72,6 +78,15 @@ sources:
 - Tags: several values per facet. `keywords` is free text for findability; every other facet
   must use the values in `TAXONOMY.md`.
 
+## INDEX.md, the router
+
+`INDEX.md` is what the model reads before choosing a file, so it must never point at a file
+that does not exist. It is not written by hand: `kb router --write` regenerates the table
+below the router mark from every file's `summary:`, and keeps whatever you wrote above the
+mark (title, usage notes). `kb lint` reports a dead entry as an error, an unlisted file or a
+table that no longer matches the summaries as a warning. Adding a base is therefore: write
+the file with a `summary:`, run `kb router --write`, run `kb lint`.
+
 ## TAXONOMY.md
 
 A closed vocabulary with a synonym ring per value. A search or `--tag` with any synonym
@@ -87,7 +102,7 @@ reaches the canonical value.
 | What | Default | Override |
 |---|---|---|
 | Global KB | `~/dev/claude-kb` | `KB_ROOT` |
-| Repo knowledge | `<repo>/.claude/knowledge`, up to 4 folders deep under `~/GitHub` | `KB_PROJECTS_ROOT` |
+| Repo knowledge | `<repo>/.claude/knowledge`: the repo you run `kb` from (found by walking up from the current directory, wherever the repo lives), plus every repo up to 4 folders deep under `~/GitHub` for `--project` and `--all` | `KB_PROJECTS_ROOT` |
 | Index | OS cache (`~/Library/Caches/kb`, `$XDG_CACHE_HOME/kb`, `%LOCALAPPDATA%\kb`) | `KB_INDEX` |
 | Today's date (for `fresh`/`stale`) | system date | `KB_TODAY` (`YYYY-MM-DD`) |
 
@@ -97,8 +112,10 @@ relative to the projects root.
 Skipped at a knowledge root: `INDEX.md`, `TAXONOMY.md`, `README.md`, `templates/`. A
 `templates/` folder deeper down is indexed. `.raw/` only with `--raw`.
 
-`kb lint` reports errors (unknown facet, value not in `TAXONOMY.md`) and warnings (no `tier`,
-no `review_by`, no tags, prose section, rule without a source). It exits 1 on errors.
+`kb lint` reports errors (an `INDEX.md` entry whose file does not exist, unknown facet, value
+not in `TAXONOMY.md`, unknown `status`) and warnings (`INDEX.md` out of date or missing a file,
+no `summary`, no `tier`, no `review_by`, no tags, prose section, rule without a source). It
+exits 1 on errors.
 
 ## Develop
 

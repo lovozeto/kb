@@ -1,4 +1,4 @@
-"""Command-line interface: kb search | get | facets | stale | lint | index."""
+"""Command-line interface: kb search | get | facets | stale | lint | router | index."""
 
 import argparse
 import json
@@ -10,14 +10,26 @@ from kb import index
 TEXT_WIDTH = 300
 
 
+def _here():
+    """{name: knowledge dir} of the repo that contains the current directory, if any.
+
+    Found by walking up from the current directory, so a repo outside KB_PROJECTS_ROOT still
+    contributes its `.claude/knowledge` when you run kb from inside it.
+    """
+    found = index.find_here(os.getcwd(), index.find_project_kbs(index.projects_root()))
+    return {found[0]: found[1]} if found else {}
+
+
+def _open(force=False):
+    return index.open_index(force=force, extra_projects=_here())
+
+
 def _scope(args):
     """Global KB + the repo you are in + any --project; --all means every project."""
     if getattr(args, "all", False):
         return index.Scope(everything=True)
     projects = set(getattr(args, "project", None) or [])
-    here = index.current_project(os.getcwd(), index.find_project_kbs(index.projects_root()))
-    if here:
-        projects.add(here)
+    projects.update(_here())
     return index.Scope(projects=projects)
 
 
@@ -35,7 +47,7 @@ def _clip(text):
 
 
 def cmd_search(args):
-    con, taxonomy = index.open_index()
+    con, taxonomy = _open()
     filters = index.Filters(bases=args.base or [], tags=args.tag or [], facets=args.facet or [],
                             tier=args.tier, fresh=args.fresh, raw=args.raw, scope=_scope(args))
     hits = index.search(con, taxonomy, " ".join(args.query), filters, limit=args.limit)
@@ -46,7 +58,7 @@ def cmd_search(args):
 
 
 def cmd_get(args):
-    con, _ = index.open_index()
+    con, _ = _open()
     if "#" in args.ref:
         text = index.get_section(con, args.ref)
         if text is None:
@@ -66,7 +78,7 @@ def cmd_get(args):
 
 
 def cmd_facets(args):
-    con, _ = index.open_index()
+    con, _ = _open()
     _emit(index.facet_counts(con, _scope(args)), args.json, lambda counts: [
         "%s: %s" % (facet, ", ".join("%s (%d)" % kv for kv in values.items()))
         for facet, values in counts.items()])
@@ -74,14 +86,30 @@ def cmd_facets(args):
 
 
 def cmd_stale(args):
-    con, _ = index.open_index()
-    _emit(index.stale_files(con, _scope(args)), args.json, lambda rows: [
+    con, _ = _open()
+    rows = index.stale_files(con, _scope(args))
+    if args.count:
+        _emit({"total": len(rows), "summary": index.stale_summary(rows)}, args.json,
+              lambda d: [d["summary"]])
+        return 0
+    _emit(rows, args.json, lambda rows: [
         "%s · %s %s" % (r["ref"], r["reason"], r["review_by"] or "") for r in rows])
     return 0
 
 
+def cmd_router(args):
+    con, _ = _open()
+    if args.write:
+        path = index.write_router(con)
+        _emit({"index": path}, args.json, lambda d: ["kb: INDEX.md written at %s" % d["index"]])
+        return 0
+    rows = [{"base": b, "ref": r, "summary": s} for b, r, s in index.router_rows(con)]
+    _emit(rows, args.json, lambda _: [index.render_router(con).rstrip("\n")])
+    return 0
+
+
 def cmd_lint(args):
-    con, taxonomy = index.open_index()
+    con, taxonomy = _open()
     report = index.lint(con, taxonomy, _scope(args))
     _emit(report, args.json, lambda rep: (
         ["ERROR  " + e for e in rep["errors"]] + ["warn   " + w for w in rep["warnings"]] +
@@ -90,7 +118,7 @@ def cmd_lint(args):
 
 
 def cmd_index(args):
-    index.open_index(force=True)
+    _open(force=True)
     _emit({"index": index.default_index_path()}, args.json,
           lambda d: ["kb: index rebuilt at %s" % d["index"]])
     return 0
@@ -128,13 +156,23 @@ def build_parser():
     with_scope(facets)
     facets.set_defaults(func=cmd_facets)
 
-    stale = commands.add_parser("stale", help="files whose review_by has passed or is missing")
+    stale = commands.add_parser("stale", help="files whose review_by has passed or is missing,"
+                                " or marked status: ambiguous")
+    stale.add_argument("--count", action="store_true",
+                       help="one summary line instead of the list (for session hooks)")
     with_scope(stale)
     stale.set_defaults(func=cmd_stale)
 
-    lint = commands.add_parser("lint", help="check tags against TAXONOMY.md and missing metadata")
+    lint = commands.add_parser("lint", help="check INDEX.md, tags against TAXONOMY.md and"
+                               " missing metadata")
     with_scope(lint)
     lint.set_defaults(func=cmd_lint)
+
+    router = commands.add_parser("router", help="the INDEX.md table generated from each file's"
+                                 " summary: (print it, or --write it into INDEX.md)")
+    router.add_argument("--write", action="store_true", help="rewrite $KB_ROOT/INDEX.md")
+    router.add_argument("--json", action="store_true")
+    router.set_defaults(func=cmd_router)
 
     rebuild = commands.add_parser("index", help="force a full rebuild (normally automatic)")
     rebuild.add_argument("--json", action="store_true")

@@ -1,5 +1,6 @@
 ---
 id: ux-forms
+summary: Forms: names, validation and inline errors
 tier: advisory
 last_verified: 2026-10-23
 review_by: 2026-11-23
